@@ -1,0 +1,114 @@
+#Main interface name and distance
+:global MainIf ether2
+:local MainGWDistance 10
+#Failover interface name
+:global RsrvIf ether1 
+:local RsrvGWDistance 20
+#Failover mobile interface name
+:global LTEIf lte1
+:local LTEGWDistance 99
+
+:local PingCount 3
+:local PingRate 2
+:local PingTargets {77.88.8.8; 8.8.8.8}
+:local host
+:local MainIfInetOk false
+:local RsrvIfInetOk false
+:local LTEIfInetOk false
+:local MainPings 0
+:local RsrvPings 0
+:local LTEPings 0
+:local LTEenabled false
+:local CurInet
+
+# Check LTE interface
+if ([:len [/interface find name=$LTEIf]] != 0) do={ 
+    :set LTEenabled true;
+}
+
+# Check current internet interface
+:local MainGWDistance [/ip route get [find comment="MTS-WAN-Route"] distance]
+:local RsrvGWDistance [/ip route get [find comment="MEGAFON-WAN-Route"] distance]
+if ($LTEenabled = true) do={ :local LTEGWDistance [/ip route get [find comment="LTE-WAN-Route"] distance] }
+if (($MainGWDistance < $RsrvGWDistance) && ($MainGWDistance < $LTEGWDistance)) do={ :set CurInet $MainIf } else={ 
+    if (($RsrvGWDistance < $MainGWDistance) && ($RsrvGWDistance < $LTEGWDistance)) do={:set CurInet $RsrvIf } else={ :set CurInet $LTEIf }}
+
+:put "Current interface $CurInet"
+:put "LTE interface availabe: $LTEenabled"
+
+foreach host in=$PingTargets do={
+    :local res [/ping $host count=$PingCount interface=$MainIf]
+    :set MainPings ($MainPings + $res)
+    :local res [/ping $host count=$PingCount interface=$RsrvIf]
+    :set RsrvPings ($RsrvPings + $res)
+    if ($LTEenabled = true) do={
+        :local res [/ping $host count=$PingCount interface=$LTEIf]
+        :set LTEPings ($LTEPings + $res)
+    }
+:delay 1
+}
+
+:set MainIfInetOk ($MainPings >= $PingRate)
+:set RsrvIfInetOk ($RsrvPings >= $PingRate)
+:set LTEIfInetOk ($LTEPings >= $PingRate)
+
+:put "Main interface internet status: $MainIfInetOk"
+:put "Backup interface internet status: $RsrvIfInetOk"
+:put "LTE interface internet status: $LTEIfInetOk"
+
+if ($CurInet = $MainIf) do={
+    if (!($MainIfInetOk)) do={
+        /ip route set [find comment="MEGAFON-WAN-Route"] distance=10
+        /ip route set [find comment="MTS-WAN-Route"] distance=20
+        if ($LTEenabled) do={ /ip route set [find comment="LTE-WAN-Route"] distance=99 }
+        :put "$MainIf disconnected. Internet switched to $RsrvIf connection"
+        /log info "$MainIf disconnected. Internet switched to $RsrvIf connection"
+        /ip firewall connection remove [find]
+    :set CurInet $RsrvIf
+    }
+}
+
+if ($CurInet = $RsrvIf) do={
+    if ($MainIfInetOk) do={
+        /ip route set [find comment="MTS-WAN-Route"] distance=10
+        /ip route set [find comment="MEGAFON-WAN-Route"] distance=20
+        if ($LTEenabled) do={ /ip route set [find comment="LTE-WAN-Route"] distance=99 }        
+        :put "$MainIf ok. Internet switched to $MainIf connection"
+        /log info "$MainIf ok. Internet switched to $MainIf connection"
+        /ip firewall connection remove [find]
+        :set CurInet $MainIf
+    }
+    if (!($RsrvIfInetOk)) do={
+        if ($LTEenabled) do={
+            /ip route set [find comment="LTE-WAN-Route"] distance=10
+            /ip route set [find comment="MTS-WAN-Route"] distance=20
+            /ip route set [find comment="MEGAFON-WAN-Route"] distance=30
+            :put "$Rsrv disconnected. Internet switched to $LteIf connection"
+            /log info "$Rsrv disconnected. Internet switched to $LteIf connection"
+            /ip firewall connection remove [find]
+            :set CurInet $LTEIf
+        }
+    }
+}
+
+if ($CurInet = $LTEIf) do={
+    if ($MainIfInetok) do={
+        /ip route set [find comment="MTS-WAN-Route"] distance=10
+        /ip route set [find comment="MEGAFON-WAN-Route"] distance=20
+        /ip route set [find comment="LTE-WAN-Route"] distance=30
+        :put "$MainIf ok. Internet switched to $MainIf connection"
+        /log info "$MainIf ok. Internet switched to $MainIf connection"
+        /ip firewall connection remove [find]
+        :set CurInet $MainIf
+    } else={
+        if ($RsrvIfInetOk) do={
+        /ip route set [find comment="MEGAFON-WAN-Route"] distance=10
+        /ip route set [find comment="MTS-WAN-Route"] distance=20
+        /ip route set [find comment="LTE-WAN-Route"] distance=30
+        :put "$RsrvIf ok. Internet switched to $RsrvIf connection"
+        /log info "$RsrvIf ok. Internet switched to $RsrvIf connection"
+        /ip firewall connection remove [find]
+        :set CurInet $RsrvIf
+        }
+    }
+}
